@@ -1,0 +1,26 @@
+<!doctype html><html lang="de"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tennis-Trainerstunden – Terminabfrage</title><link rel="stylesheet" href="/style.css"></head>
+<body><main class="wrap">
+<section class="card hero"><h1>Tennis-Trainerstunden</h1><p>Wähle bitte alle Termine aus, an denen du Zeit hast.</p></section>
+<section class="card">
+<label>Name</label><input id="name" maxlength="80" placeholder="Vor- und Nachname">
+<label class="check"><input id="none" type="checkbox"> <span>Ich habe keinen Bedarf an einer Trainerstunde.</span></label>
+<h2>Verfügbare Termine</h2><div id="slots"></div>
+<button id="send">Antwort speichern</button><div id="msg"></div>
+</section></main>
+<script>
+let appointments=[];
+const $=id=>document.getElementById(id);
+function dateText(d){return new Intl.DateTimeFormat("de-DE",{weekday:"long",day:"2-digit",month:"2-digit",year:"numeric"}).format(new Date(d+"T12:00:00"))}
+async function load(){const r=await fetch("/api/appointments");appointments=await r.json();let last="";
+$("slots").innerHTML=appointments.map(a=>{
+let h=last!==a.date?`<div class="date">${dateText(a.date)}</div>`:"";last=a.date;
+return h+`<label class="slot"><input class="s" type="checkbox" value="${a.id}"><b>${a.time.slice(0,5)} Uhr</b><span>${esc(a.label||"")}</span></label>`}).join("")||"<p>Noch keine Termine eingetragen.</p>"}
+$("none").onchange=()=>document.querySelectorAll(".s").forEach(x=>{x.disabled=$("none").checked;if($("none").checked)x.checked=false});
+$("send").onclick=async()=>{const body={name:$("name").value.trim(),noNeed:$("none").checked,appointmentIds:[...document.querySelectorAll(".s:checked")].map(x=>+x.value)};
+const r=await fetch("/api/responses",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});const d=await r.json();
+$("msg").textContent=r.ok?"Vielen Dank! Deine Antwort wurde gespeichert.":d.error||"Fehler";$("msg").className=r.ok?"ok":"err";
+if(r.ok){$("name").value="";$("none").checked=false;document.querySelectorAll(".s").forEach(x=>{x.checked=false;x.disabled=false})}};
+function esc(v){return String(v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]))}load();
+</script></body></html>
