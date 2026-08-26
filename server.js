@@ -1,80 +1,9 @@
-const express=require("express");
-const path=require("path");
-const {createClient}=require("@supabase/supabase-js");
-
-const app=express();
-app.use(express.json());
-app.use(express.static(path.join(__dirname,"public")));
-
-const supabase=createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY);
-const ADMIN_PASSWORD=process.env.ADMIN_PASSWORD;
-
-function admin(req,res,next){
-  if(!ADMIN_PASSWORD || req.headers["x-admin-password"]!==ADMIN_PASSWORD)
-    return res.status(401).json({error:"Nicht autorisiert."});
-  next();
-}
-
-app.get("/api/appointments",async(req,res)=>{
-  const {data,error}=await supabase.from("appointments").select("*").order("date").order("time");
-  if(error)return res.status(500).json({error:error.message});
-  res.json(data);
-});
-
-app.post("/api/responses",async(req,res)=>{
-  const name=String(req.body?.name||"").trim();
-  const noNeed=!!req.body?.noNeed;
-  const appointmentIds=Array.isArray(req.body?.appointmentIds)
-    ? [...new Set(req.body.appointmentIds.map(Number).filter(Number.isInteger))]:[];
-
-  if(!name)return res.status(400).json({error:"Bitte einen Namen eingeben."});
-  if(!noNeed&&!appointmentIds.length)
-    return res.status(400).json({error:"Bitte mindestens einen Termin auswählen oder 'Kein Bedarf' wählen."});
-
-  const {data:response,error}=await supabase.from("responses")
-    .insert({name,no_need:noNeed}).select().single();
-  if(error)return res.status(500).json({error:error.message});
-
-  if(appointmentIds.length){
-    const rows=appointmentIds.map(appointment_id=>({response_id:response.id,appointment_id}));
-    const r=await supabase.from("response_slots").insert(rows);
-    if(r.error)return res.status(500).json({error:r.error.message});
-  }
-  res.json({ok:true});
-});
-
-app.get("/api/admin/results",admin,async(req,res)=>{
-  const a=await supabase.from("appointments").select("*").order("date").order("time");
-  const r=await supabase.from("responses").select("id,name,no_need,created_at,response_slots(appointment_id)").order("name");
-  if(a.error||r.error)return res.status(500).json({error:(a.error||r.error).message});
-  const responses=(r.data||[]).map(x=>({...x,appointment_ids:(x.response_slots||[]).map(s=>s.appointment_id)}));
-  res.json({appointments:a.data||[],responses});
-});
-
-app.post("/api/admin/appointments",admin,async(req,res)=>{
-  const {date,time,label}=req.body||{};
-  if(!date||!time)return res.status(400).json({error:"Datum und Uhrzeit fehlen."});
-  const {data,error}=await supabase.from("appointments").insert({date,time,label:String(label||"").trim()}).select().single();
-  if(error)return res.status(500).json({error:error.message});
-  res.json(data);
-});
-
-app.delete("/api/admin/appointments/:id",admin,async(req,res)=>{
-  const id=Number(req.params.id);
-  await supabase.from("response_slots").delete().eq("appointment_id",id);
-  const {error}=await supabase.from("appointments").delete().eq("id",id);
-  if(error)return res.status(500).json({error:error.message});
-  res.json({ok:true});
-});
-
-app.delete("/api/admin/responses/:id",admin,async(req,res)=>{
-  const id=Number(req.params.id);
-  await supabase.from("response_slots").delete().eq("response_id",id);
-  const {error}=await supabase.from("responses").delete().eq("id",id);
-  if(error)return res.status(500).json({error:error.message});
-  res.json({ok:true});
-});
-
-app.get("/admin",(req,res)=>res.sendFile(path.join(__dirname,"public/admin.html")));
-
-app.listen(process.env.PORT||10000,"0.0.0.0",()=>console.log("Tennis-Terminabfrage gestartet"));
+const express=require('express'),path=require('path'),crypto=require('crypto');const{createClient}=require('@supabase/supabase-js');const app=express(),PORT=process.env.PORT||10000,PUBLIC=path.join(__dirname,'public');app.use(express.json());app.use(express.static(PUBLIC));const db=process.env.SUPABASE_URL&&process.env.SUPABASE_SERVICE_ROLE_KEY?createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY):null,CENTRAL=process.env.CENTRAL_ADMIN_PASSWORD||'';const hash=p=>{const s=crypto.randomBytes(16).toString('hex');return s+':'+crypto.scryptSync(p,s,64).toString('hex')};const verify=(p,v)=>{try{const[s,h]=String(v).split(':'),d=crypto.scryptSync(p,s,64),x=Buffer.from(h,'hex');return d.length===x.length&&crypto.timingSafeEqual(d,x)}catch{return false}};const need=(r)=>{if(!db){r.status(500).json({error:'Supabase ist nicht konfiguriert.'});return false}return true};const ca=(q,r,n)=>{if(!CENTRAL||q.headers['x-central-password']!==CENTRAL)return r.status(401).json({error:'Falsches zentrales Admin-Passwort.'});n()};async function get(slug){return(await db.from('clubs').select('*').eq('slug',slug).maybeSingle()).data}async function auth(q,r,n){const c=await get(q.params.slug);if(!c)return r.status(404).json({error:'Verein nicht gefunden.'});if(!verify(q.headers['x-club-password'],c.password_hash))return r.status(401).json({error:'Falsches Vereins-Admin-Passwort.'});q.club=c;n()}
+app.get('/',(_,r)=>r.sendFile(path.join(PUBLIC,'index.html')));app.get('/club/:slug',(_,r)=>r.sendFile(path.join(PUBLIC,'survey.html')));app.get('/admin/:slug',(_,r)=>r.sendFile(path.join(PUBLIC,'club-admin.html')));app.get('/central-admin',(_,r)=>r.sendFile(path.join(PUBLIC,'central-admin.html')));app.get('/health',(_,r)=>r.json({ok:true,databaseConfigured:!!db}));
+app.get('/api/clubs',async(_,r)=>{if(!need(r))return;const x=await db.from('clubs').select('id,name,slug,active').eq('active',true).order('name');if(x.error)return r.status(500).json({error:x.error.message});r.json(x.data||[])});
+app.get('/api/club/:slug',async(q,r)=>{if(!need(r))return;const c=await get(q.params.slug);if(!c||!c.active)return r.status(404).json({error:'Abfrage nicht gefunden.'});const x=await db.from('slots').select('id,weekday,time,label').eq('club_id',c.id).order('weekday').order('time');if(x.error)return r.status(500).json({error:x.error.message});r.json({name:c.name,slug:c.slug,slots:x.data||[]})});
+app.post('/api/club/:slug/responses',async(q,r)=>{if(!need(r))return;const c=await get(q.params.slug);if(!c||!c.active)return r.status(404).json({error:'Abfrage nicht gefunden.'});const name=String(q.body?.name||'').trim(),none=!!q.body?.noNeed,ids=Array.isArray(q.body?.slotIds)?[...new Set(q.body.slotIds.map(Number).filter(Number.isInteger))]:[];if(!name)return r.status(400).json({error:'Bitte einen Namen eingeben.'});if(!none&&!ids.length)return r.status(400).json({error:'Bitte mindestens eine Zeit auswählen oder Kein Bedarf wählen.'});if(ids.length){const v=await db.from('slots').select('id').eq('club_id',c.id).in('id',ids);if(v.error||v.data.length!==ids.length)return r.status(400).json({error:'Ungültige Auswahl.'})}const x=await db.from('responses').insert({club_id:c.id,name,no_need:none}).select().single();if(x.error)return r.status(500).json({error:x.error.message});if(ids.length){const z=await db.from('response_slots').insert(ids.map(slot_id=>({response_id:x.data.id,slot_id})));if(z.error)return r.status(500).json({error:z.error.message})}r.json({ok:true})});
+app.get('/api/admin/:slug/results',auth,async(q,r)=>{const a=await db.from('slots').select('*').eq('club_id',q.club.id).order('weekday').order('time'),b=await db.from('responses').select('id,name,no_need,created_at,response_slots(slot_id)').eq('club_id',q.club.id).order('name');if(a.error||b.error)return r.status(500).json({error:(a.error||b.error).message});r.json({club:{name:q.club.name,slug:q.club.slug},slots:a.data||[],responses:(b.data||[]).map(x=>({...x,slot_ids:(x.response_slots||[]).map(y=>y.slot_id)}))})});
+app.post('/api/admin/:slug/slots',auth,async(q,r)=>{const w=Number(q.body?.weekday),t=q.body?.time;if(!w||w<1||w>7||!t)return r.status(400).json({error:'Wochentag und Uhrzeit fehlen.'});const x=await db.from('slots').insert({club_id:q.club.id,weekday:w,time:t,label:String(q.body?.label||'').trim()}).select().single();if(x.error)return r.status(500).json({error:x.error.message});r.json(x.data)});app.delete('/api/admin/:slug/slots/:id',auth,async(q,r)=>{const id=Number(q.params.id);await db.from('response_slots').delete().eq('slot_id',id);const x=await db.from('slots').delete().eq('id',id).eq('club_id',q.club.id);if(x.error)return r.status(500).json({error:x.error.message});r.json({ok:true})});app.delete('/api/admin/:slug/responses/:id',auth,async(q,r)=>{const id=Number(q.params.id);await db.from('response_slots').delete().eq('response_id',id);const x=await db.from('responses').delete().eq('id',id).eq('club_id',q.club.id);if(x.error)return r.status(500).json({error:x.error.message});r.json({ok:true})});
+app.get('/api/central/clubs',(q,r)=>ca(q,r,async()=>{const x=await db.from('clubs').select('id,name,slug,active,created_at').order('name');if(x.error)return r.status(500).json({error:x.error.message});r.json(x.data||[])}));app.post('/api/central/clubs',(q,r)=>ca(q,r,async()=>{const name=String(q.body?.name||'').trim(),slug=String(q.body?.slug||'').trim().toLowerCase(),password=String(q.body?.password||'');if(!name||!/^[a-z0-9-]+$/.test(slug)||password.length<8)return r.status(400).json({error:'Name, gültiger Kurzname und Passwort mit mindestens 8 Zeichen erforderlich.'});const x=await db.from('clubs').insert({name,slug,password_hash:hash(password),active:true}).select('id,name,slug,active').single();if(x.error)return r.status(500).json({error:x.error.message});r.json(x.data)}));app.put('/api/central/clubs/:id/password',(q,r)=>ca(q,r,async()=>{const p=String(q.body?.password||'');if(p.length<8)return r.status(400).json({error:'Mindestens 8 Zeichen.'});const x=await db.from('clubs').update({password_hash:hash(p)}).eq('id',Number(q.params.id));if(x.error)return r.status(500).json({error:x.error.message});r.json({ok:true})}));app.put('/api/central/clubs/:id/active',(q,r)=>ca(q,r,async()=>{const x=await db.from('clubs').update({active:!!q.body?.active}).eq('id',Number(q.params.id));if(x.error)return r.status(500).json({error:x.error.message});r.json({ok:true})}));app.delete('/api/central/clubs/:id',(q,r)=>ca(q,r,async()=>{const x=await db.from('clubs').delete().eq('id',Number(q.params.id));if(x.error)return r.status(500).json({error:x.error.message});r.json({ok:true})}));
+app.listen(PORT,'0.0.0.0',()=>console.log('Tennis-Trainer läuft auf '+PORT));
